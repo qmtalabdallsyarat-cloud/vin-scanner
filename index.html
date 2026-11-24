@@ -145,13 +145,13 @@
       <video id="video" autoplay playsinline muted></video>
       <div class="aim-overlay">
         <div class="aim-box"></div>
-        <div class="aim-label">ضع رقم الهيكل (17 خانة) داخل المستطيل الأخضر وثبّت لحظة</div>
+        <div class="aim-label">ضع رقم الهيكل (17 خانة) داخل المستطيل الأخضر</div>
       </div>
     </div>
 
     <div class="meta-row">
       <span id="charCount">الخانات: 0 / 17</span>
-      <span id="confirmBadge">الثبات: 0 / 3</span>
+      <span id="confirmBadge">الثبات: 0 / 2</span>
     </div>
 
     <input type="text" id="vinInput" placeholder="رقم الهيكل (17 خانة)" maxlength="17">
@@ -185,7 +185,6 @@
     let isBusy = false;
     let scanTimer = null;
 
-    // قائمة القراءات النظيفة المتطابقة لرقم الهيكل الحالي
     let cleanReadings = [];
 
     vinInput.addEventListener('input', function () {
@@ -203,7 +202,7 @@
         tessedit_char_whitelist: 'ABCDEFGHJKLMNPRSTUVWXYZ0123456789',
         tessedit_pageseg_mode: '7'
       });
-      statusEl.textContent = 'جاهز — ضع الرقم داخل المستطيل الأخضر وثبّت الكاميرا';
+      statusEl.textContent = 'جاهز — ضع الرقم داخل المستطيل الأخضر';
       startLoop();
     }
 
@@ -234,7 +233,7 @@
 
     function startLoop() {
       if (scanTimer) clearInterval(scanTimer);
-      scanTimer = setInterval(captureAndReadFrame, 550);
+      scanTimer = setInterval(captureAndReadFrame, 450);
     }
 
     function toggleLiveScan() {
@@ -243,7 +242,7 @@
         cleanReadings = [];
         liveBtn.textContent = 'إيقاف المسح التلقائي';
         liveBtn.classList.remove('active');
-        confirmBadge.textContent = 'الثبات: 0 / 3';
+        confirmBadge.textContent = 'الثبات: 0 / 2';
         statusEl.textContent = 'المسح التلقائي يعمل...';
       } else {
         liveBtn.textContent = 'تشغيل المسح التلقائي';
@@ -253,8 +252,8 @@
       }
     }
 
-    // فحص حدة الإطار وتجنب الإطارات الضبابية أو المهتزة
-    function checkFrameSharpness(data, width, height) {
+    // فحص مبدئي ميسّر لاستبعاد الخلفيات الفارغة تماماً دون رفض الصور الواضحة
+    function analyzeFrame(data, width, height) {
       const total = width * height;
       const gray = new Float32Array(total);
       let sum = 0;
@@ -280,12 +279,12 @@
 
       const avgEdge = count > 0 ? edgeSum / count : 0;
       return {
-        sharp: avgEdge >= 20,
+        hasText: avgEdge >= 8,
         darkBg: mean < 118
       };
     }
 
-    // استخراج VIN نظيف (17 خانة) ورفض أي سلسلة تحمل تكرارات مزيفة مثل 2222 أو 5555 أو ZZZZ
+    // استخراج VIN نظيف ورفض التكرارات العشوائية الشديدة فقط (4 رموز متتالية فأكثر)
     function parseCleanVin(rawText) {
       if (!rawText) return '';
       let s = rawText.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -295,15 +294,12 @@
       if (!match) return '';
 
       const vin = match[0];
-      // رفض السلاسل المشوشة التي تكرر نفس الرمز أكثر من مرتين متتاليتين (مثل 222 أو 555 أو ZZZ)
-      if (/(.)\1{2,}/.test(vin)) return '';
-      // رفض القراءات منخفضة التنوع الناتجة عن الضوضاء
-      if (new Set(vin.split('')).size < 8) return '';
+      if (/(.)\1{3,}/.test(vin)) return '';
+      if (new Set(vin.split('')).size < 6) return '';
 
       return vin;
     }
 
-    // حساب عدد الخانات المتطابقة بين قراءتين (من 17 خانة)
     function similarityCount(a, b) {
       if (!a || !b || a.length !== 17 || b.length !== 17) return 0;
       let same = 0;
@@ -313,7 +309,6 @@
       return same;
     }
 
-    // تصويت خانة بخانة من القراءات المتطابقة جداً (15 خانة متطابقة فأكثر)
     function voteFromConsistentReadings(list) {
       const out = [];
       for (let i = 0; i < 17; i++) {
@@ -333,7 +328,7 @@
       return out.join('');
     }
 
-    function buildOcrCanvas(sourceEl, sx, sy, sw, sh, outW, outH) {
+    function buildOcrCanvas(sourceEl, sx, sy, sw, sh, outW, outH, bypassGate) {
       const canvas = document.createElement('canvas');
       canvas.width = outW;
       canvas.height = outH;
@@ -345,16 +340,15 @@
       const imgData = ctx.getImageData(0, 0, outW, outH);
       const data = imgData.data;
 
-      const info = checkFrameSharpness(data, outW, outH);
-      if (!info.sharp) {
+      const info = analyzeFrame(data, outW, outH);
+      if (!bypassGate && !info.hasText) {
         return null;
       }
 
       for (let i = 0; i < data.length; i += 4) {
         let gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
         if (info.darkBg) gray = 255 - gray;
-        // تباين معتدل يحافظ على شكل الحروف والأرقام دون تشويه
-        const val = Math.max(0, Math.min(255, (gray - 128) * 1.38 + 128));
+        const val = Math.max(0, Math.min(255, (gray - 128) * 1.42 + 128));
         data[i] = val;
         data[i + 1] = val;
         data[i + 2] = val;
@@ -384,11 +378,12 @@
           cropW,
           cropH,
           Math.min(1200, cropW),
-          Math.min(250, cropH)
+          Math.min(250, cropH),
+          false
         );
 
         if (!canvas) {
-          confirmBadge.textContent = 'الثبات: ثبّت الكاميرا';
+          confirmBadge.textContent = 'الثبات: 0 / 2';
           return;
         }
 
@@ -396,10 +391,10 @@
         const vin = parseCleanVin(text);
         if (!vin) return;
 
-        // إذا اختلف الرقم عن القراءة المرجعية بأكثر من 2 خانة، نبدأ سلة جديدة لرقم مختلف
+        // إذا اختلف الرقم عن القراءة المرجعية بأكثر من 4 خانات، نبدأ سلة جديدة
         if (cleanReadings.length > 0) {
           const anchor = cleanReadings[cleanReadings.length - 1];
-          if (similarityCount(anchor, vin) < 15) {
+          if (similarityCount(anchor, vin) < 13) {
             cleanReadings = [];
           }
         }
@@ -408,21 +403,21 @@
         if (cleanReadings.length > 5) cleanReadings.shift();
 
         const voted = voteFromConsistentReadings(cleanReadings);
-        const strongMatches = cleanReadings.filter(r => similarityCount(r, voted) >= 16).length;
-        const step = Math.min(3, strongMatches);
-        confirmBadge.textContent = 'الثبات: ' + step + ' / 3';
+        vinInput.value = voted;
+        charCount.textContent = 'الخانات: 17 / 17';
 
-        // لا نثبّت ونوقف المسح إلا عند تطابق 3 قراءات نظيفة متقاربة جداً (16 خانة متطابقة فأكثر)
-        if (cleanReadings.length >= 3 && strongMatches >= 3) {
-          vinInput.value = voted;
-          charCount.textContent = 'الخانات: 17 / 17';
-          statusEl.textContent = 'تم التقاط الرقم بثبات عالٍ — راجع أو عدّل ثم اضغط إرسال للشيت';
+        const matches = cleanReadings.filter(r => similarityCount(r, voted) >= 14).length;
+        const step = Math.min(2, matches);
+        confirmBadge.textContent = 'الثبات: ' + step + ' / 2';
+
+        if (cleanReadings.length >= 2 && matches >= 2) {
+          statusEl.textContent = 'تم التقاط الرقم — راجع أو عدّل ثم اضغط إرسال للشيت';
           if (navigator.vibrate) navigator.vibrate(100);
           isScanning = false;
           liveBtn.textContent = 'مسح سيارة جديدة';
           liveBtn.classList.add('active');
         } else {
-          statusEl.textContent = 'جاري التحقق من دقة الخانات (' + step + '/3)...';
+          statusEl.textContent = 'قراءة مباشرة في الخانة — ثبّت لحظة للتأكيد...';
         }
       } catch (e) {
       } finally {
@@ -444,11 +439,11 @@
           const outW = Math.round(img.width * scale);
           const outH = Math.round(img.height * scale);
 
-          const canvas = buildOcrCanvas(img, 0, 0, img.width, img.height, outW, outH);
-          const source = canvas || img;
+          const canvas = buildOcrCanvas(img, 0, 0, img.width, img.height, outW, outH, true);
+          const targetSource = canvas || img;
           const res = worker
-            ? await worker.recognize(source)
-            : await Tesseract.recognize(source, 'eng');
+            ? await worker.recognize(targetSource)
+            : await Tesseract.recognize(targetSource, 'eng');
 
           const clean = parseCleanVin(res.data.text);
           const rawFallback = res.data.text.replace(/[^A-HJ-NPR-Z0-9]/gi, '').toUpperCase().slice(0, 17);
@@ -456,7 +451,7 @@
 
           vinInput.value = finalVal;
           charCount.textContent = 'الخانات: ' + finalVal.length + ' / 17';
-          confirmBadge.textContent = clean ? 'الثبات: 3 / 3' : 'الثبات: مراجعة';
+          confirmBadge.textContent = clean ? 'الثبات: 2 / 2' : 'الثبات: مراجعة';
           statusEl.textContent = 'راجع الرقم في الخانة وتأكد منه ثم اضغط إرسال للشيت';
         };
         img.src = e.target.result;
@@ -487,7 +482,7 @@
         vinInput.value = '';
         charCount.textContent = 'الخانات: 0 / 17';
         cleanReadings = [];
-        confirmBadge.textContent = 'الثبات: 0 / 3';
+        confirmBadge.textContent = 'الثبات: 0 / 2';
         sendBtn.disabled = false;
         isScanning = true;
         liveBtn.textContent = 'إيقاف المسح التلقائي';
