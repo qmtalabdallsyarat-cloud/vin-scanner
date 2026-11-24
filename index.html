@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ماسح VIN الذكي (دقة 100%)</title>
+  <title>ماسح VIN الذكي للجرد</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -182,24 +182,24 @@
       <video id="video" autoplay playsinline muted></video>
       <div class="aim-overlay">
         <div class="aim-box"></div>
-        <div class="aim-label">مرّر رقم الهيكل (17 خانة) داخل المستطيل الأخضر</div>
+        <div class="aim-label">وجّه الرقم داخل المستطيل أو اضغط التقاط صورة عالية الدقة</div>
       </div>
     </div>
 
     <div class="meta-row">
       <span id="charCount">الخانات: 0 / 17</span>
-      <span id="modeBadge">الوضع: مسح ذكي</span>
+      <span id="modeBadge">الوضع: جاهز</span>
     </div>
 
     <input type="text" id="vinInput" placeholder="رقم الهيكل (17 خانة)" maxlength="17">
     <input type="text" id="refInput" placeholder="الرقم المرجعي (اختياري)">
 
     <div class="btn-row">
-      <button type="button" class="btn btn-live" id="liveBtn" onclick="toggleLiveScan()">إيقاف المسح</button>
+      <button type="button" class="btn btn-live" id="liveBtn" onclick="toggleLiveScan()">تشغيل المسح التلقائي</button>
       <button type="button" class="btn btn-send" id="sendBtn" onclick="sendToSheet()">إرسال للشيت</button>
     </div>
 
-    <label for="cameraInput" class="btn-fallback">التقاط صورة عالية الدقة (بديل)</label>
+    <label for="cameraInput" class="btn-fallback">التقاط صورة عالية الدقة (موصى به)</label>
     <input type="file" id="cameraInput" class="visually-hidden-file" accept="image/*" capture="environment">
 
     <div id="status">جاري تشغيل الكاميرا...</div>
@@ -218,11 +218,11 @@
     const modeBadge = document.getElementById('modeBadge');
     const apiKeyInput = document.getElementById('apiKeyInput');
 
-    let isScanning = true;
+    // المسح التلقائي متوقف افتراضياً لتوفير الحصة وتجنب الأخطاء المتكررة؛ يعمل عند الضغط أو بالتقاط الصورة
+    let isScanning = false;
     let isBusy = false;
     let scanTimer = null;
 
-    // استرجاع مفتاح Gemini المحفوظ في المتصفح
     const savedKey = localStorage.getItem('GEMINI_VIN_API_KEY') || '';
     if (savedKey) {
       apiKeyInput.value = savedKey;
@@ -235,7 +235,7 @@
         return;
       }
       localStorage.setItem('GEMINI_VIN_API_KEY', key);
-      statusEl.textContent = 'تم حفظ المفتاح — مرّر الكاميرا على رقم الهيكل';
+      statusEl.textContent = 'تم حفظ المفتاح — استخدم التقاط صورة عالية الدقة أو شغل المسح التلقائي';
     }
 
     vinInput.addEventListener('input', function () {
@@ -262,9 +262,8 @@
           } catch (_) {}
         }
         statusEl.textContent = savedKey
-          ? 'جاهز — مرّر رقم الهيكل داخل المستطيل الأخضر'
+          ? 'جاهز — اضغط (التقاط صورة عالية الدقة) لقراءة فورية بدون استهلاك الحصة'
           : 'ألصق مفتاح Gemini API Key بالأعلى واضغط حفظ للبدء';
-        startLoop();
       } catch (err) {
         statusEl.textContent = 'الكاميرا المباشرة غير متاحة — استخدم التقاط الصورة بالأسفل';
         liveBtn.disabled = true;
@@ -273,21 +272,30 @@
 
     function startLoop() {
       if (scanTimer) clearInterval(scanTimer);
-      scanTimer = setInterval(captureAndReadWithGemini, 1100);
+      scanTimer = setInterval(captureAndReadWithGemini, 4000);
+    }
+
+    function stopLoop() {
+      if (scanTimer) {
+        clearInterval(scanTimer);
+        scanTimer = null;
+      }
     }
 
     function toggleLiveScan() {
       isScanning = !isScanning;
       if (isScanning) {
-        liveBtn.textContent = 'إيقاف المسح';
-        liveBtn.classList.remove('active');
-        modeBadge.textContent = 'الوضع: مسح ذكي';
-        statusEl.textContent = 'المسح الذكي يعمل...';
-      } else {
-        liveBtn.textContent = 'استئناف المسح';
+        liveBtn.textContent = 'إيقاف المسح التلقائي';
         liveBtn.classList.add('active');
+        modeBadge.textContent = 'الوضع: مسح تلقائي';
+        statusEl.textContent = 'المسح التلقائي يعمل كل 4 ثوانٍ...';
+        startLoop();
+      } else {
+        stopLoop();
+        liveBtn.textContent = 'تشغيل المسح التلقائي';
+        liveBtn.classList.remove('active');
         modeBadge.textContent = 'الوضع: متوقف';
-        statusEl.textContent = 'تم إيقاف المسح — راجع الرقم أو أرسله';
+        statusEl.textContent = 'تم إيقاف المسح التلقائي لتوفير الحصة';
       }
     }
 
@@ -352,7 +360,6 @@
       try {
         const vw = video.videoWidth;
         const vh = video.videoHeight;
-        // قص منطقة المستطيل الأخضر مع هامش بسيط لسرعة الإرسال ودقة القراءة
         const cropW = Math.floor(vw * 0.94);
         const cropH = Math.floor(vh * 0.28);
         const cropX = Math.floor((vw - cropW) / 2);
@@ -372,16 +379,27 @@
           vinInput.value = vin;
           charCount.textContent = 'الخانات: 17 / 17';
           isScanning = false;
-          liveBtn.textContent = 'مسح سيارة جديدة';
-          liveBtn.classList.add('active');
+          stopLoop();
+          liveBtn.textContent = 'تشغيل المسح التلقائي';
+          liveBtn.classList.remove('active');
           modeBadge.textContent = 'مكتمل (17/17)';
           statusEl.textContent = 'تم التقاط الرقم بدقة — اضغط إرسال للشيت';
           if (navigator.vibrate) navigator.vibrate(100);
         } else {
-          statusEl.textContent = 'مرّر رقم الهيكل داخل المستطيل الأخضر...';
+          statusEl.textContent = 'لم يظهر رقم واضح — جرّب التقاط صورة عالية الدقة';
         }
       } catch (err) {
-        statusEl.textContent = 'تحقق من مفتاح Gemini API أو الإنترنت: ' + err.message;
+        // إيقاف المسح التلقائي فوراً عند نفاد الحصة حتى لا تتكرر الرسالة كل ثانية
+        isScanning = false;
+        stopLoop();
+        liveBtn.textContent = 'تشغيل المسح التلقائي';
+        liveBtn.classList.remove('active');
+        modeBadge.textContent = 'تجاوز الحد (Quota)';
+        if (err.message && err.message.toLowerCase().includes('quota')) {
+          statusEl.textContent = 'تم تجاوز حد الاستخدام المجاني لمفتاح Gemini حالياً — انتظر قليلاً أو استخدم مفتاحاً آخر من Google AI Studio';
+        } else {
+          statusEl.textContent = 'خطأ في الاتصال أو المفتاح: ' + err.message;
+        }
       } finally {
         isBusy = false;
       }
@@ -421,7 +439,12 @@
               statusEl.textContent = 'لم يتم العثور على 17 خانة واضحة في الصورة';
             }
           } catch (err) {
-            statusEl.textContent = 'خطأ: ' + err.message;
+            modeBadge.textContent = 'تجاوز الحد (Quota)';
+            if (err.message && err.message.toLowerCase().includes('quota')) {
+              statusEl.textContent = 'تم تجاوز حد الاستخدام المجاني لمفتاح Gemini حالياً — انتظر قليلاً أو استخدم مفتاحاً آخر من Google AI Studio';
+            } else {
+              statusEl.textContent = 'خطأ: ' + err.message;
+            }
           }
         };
         img.src = e.target.result;
@@ -434,7 +457,7 @@
       const ref = refInput.value.trim();
 
       if (!vin) {
-        statusEl.textContent = 'مرّر الكاميرا على الرقم أو اكتبه أولاً';
+        statusEl.textContent = 'التقط الرقم أو اكتبه أولاً';
         return;
       }
 
@@ -451,11 +474,8 @@
         statusEl.textContent = 'تم الحفظ: ' + vin + ' — جاهز للسيارة التالية';
         vinInput.value = '';
         charCount.textContent = 'الخانات: 0 / 17';
-        modeBadge.textContent = 'الوضع: مسح ذكي';
+        modeBadge.textContent = 'الوضع: جاهز';
         sendBtn.disabled = false;
-        isScanning = true;
-        liveBtn.textContent = 'إيقاف المسح';
-        liveBtn.classList.remove('active');
       })
       .catch(function () {
         statusEl.textContent = 'فشل الإرسال — تأكد من الإنترنت';
