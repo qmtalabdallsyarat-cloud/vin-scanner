@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ماسح VIN الدقيق</title>
+  <title>ماسح VIN السريع</title>
   <script src="https://unpkg.com/tesseract.js@v2.1.0/dist/tesseract.min.js"></script>
   <style>
     * { box-sizing: border-box; }
@@ -54,8 +54,8 @@
     }
     .aim-box {
       width: 92%;
-      height: 58px;
-      border: 2px solid #38a169;
+      height: 60px;
+      border: 2px solid #2f855a;
       border-radius: 6px;
       background: transparent;
       box-shadow: 0 0 0 9999px rgba(16, 42, 67, 0.52);
@@ -139,19 +139,19 @@
 </head>
 <body>
   <div class="card">
-    <h2>ماسح VIN الدقيق</h2>
+    <h2>ماسح VIN السريع</h2>
 
     <div class="scanner-wrap">
       <video id="video" autoplay playsinline muted></video>
       <div class="aim-overlay">
         <div class="aim-box"></div>
-        <div class="aim-label">ثبّت الرقم (17 خانة) داخل المستطيل الأخضر</div>
+        <div class="aim-label">مرّر الرقم (17 خانة) داخل المستطيل الأخضر</div>
       </div>
     </div>
 
     <div class="meta-row">
       <span id="charCount">الخانات: 0 / 17</span>
-      <span id="confirmBadge">حالة القراءة: جاري البحث</span>
+      <span id="confirmBadge">التطابق: 0 / 2</span>
     </div>
 
     <input type="text" id="vinInput" placeholder="رقم الهيكل (17 خانة)" maxlength="17">
@@ -185,13 +185,17 @@
     let isBusy = false;
     let scanTimer = null;
 
+    // ذاكرة قراءات متعددة للتصويت السريع مع اهتزاز اليد الخفيف
+    let recentReadings = [];
+    let currentBestVin = '';
+
     vinInput.addEventListener('input', function () {
       this.value = this.value.replace(/[^A-HJ-NPR-Z0-9]/gi, '').toUpperCase().slice(0, 17);
       charCount.textContent = 'الخانات: ' + this.value.length + ' / 17';
     });
 
     async function initWorker() {
-      statusEl.textContent = 'جاري تجهيز محرك القراءة...';
+      statusEl.textContent = 'جاري تجهيز محرك القراءة السريع...';
       worker = Tesseract.createWorker();
       await worker.load();
       await worker.loadLanguage('eng');
@@ -200,7 +204,7 @@
         tessedit_char_whitelist: 'ABCDEFGHJKLMNPRSTUVWXYZ0123456789',
         tessedit_pageseg_mode: '7'
       });
-      statusEl.textContent = 'جاهز — وجّه المستطيل الأخضر على رقم الهيكل';
+      statusEl.textContent = 'جاهز — مرّر الرقم داخل المستطيل الأخضر';
       startLoop();
     }
 
@@ -210,11 +214,18 @@
           video: {
             facingMode: { ideal: 'environment' },
             width: { ideal: 1920 },
-            height: { ideal: 1080 }
+            height: { ideal: 1080 },
+            focusMode: { ideal: 'continuous' }
           },
           audio: false
         });
         video.srcObject = stream;
+        const track = stream.getVideoTracks()[0];
+        if (track && track.applyConstraints) {
+          try {
+            await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+          } catch (_) {}
+        }
         await initWorker();
       } catch (err) {
         statusEl.textContent = 'الكاميرا المباشرة غير متاحة — استخدم التقاط الصورة بالأسفل';
@@ -224,75 +235,101 @@
 
     function startLoop() {
       if (scanTimer) clearInterval(scanTimer);
-      scanTimer = setInterval(captureAndReadFrame, 850);
+      scanTimer = setInterval(captureAndReadFrame, 420);
+    }
+
+    function resetScannerMemory() {
+      recentReadings = [];
+      currentBestVin = '';
+      confirmBadge.textContent = 'التطابق: 0 / 2';
     }
 
     function toggleLiveScan() {
       isScanning = !isScanning;
+      resetScannerMemory();
       if (isScanning) {
         liveBtn.textContent = 'إيقاف المسح التلقائي';
         liveBtn.classList.remove('active');
-        confirmBadge.textContent = 'حالة القراءة: جاري البحث';
         statusEl.textContent = 'المسح التلقائي يعمل...';
       } else {
         liveBtn.textContent = 'تشغيل المسح التلقائي';
         liveBtn.classList.add('active');
-        confirmBadge.textContent = 'حالة القراءة: متوقف';
-        statusEl.textContent = 'تم إيقاف المسح مؤقتاً — راجع الرقم أو عدّله ثم أرسله';
+        statusEl.textContent = 'تم إيقاف المسح مؤقتاً';
       }
     }
 
-    // استخراج أفضل 17 خانة مطابقة لنمط رقم الهيكل القياسي
-    function extractVinCandidate(rawText) {
-      let cleaned = rawText.toUpperCase().replace(/[^A-Z0-9]/g, '');
-      cleaned = cleaned.replace(/I/g, '1').replace(/O/g, '0').replace(/Q/g, '0');
-      const strictMatch = cleaned.match(/[A-HJ-NPR-Z0-9]{17}/);
-      if (strictMatch) return strictMatch[0];
-
-      const alphaNum = rawText.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
-      return alphaNum.slice(0, 17);
+    // تصحيح الأخطاء المتكررة في أرقام الهياكل (خاصة 4 و 3 و 0 و 1)
+    function normalizeVin(rawText) {
+      let s = rawText.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      s = s.replace(/I/g, '1').replace(/O/g, '0').replace(/Q/g, '0');
+      const match = s.match(/[A-HJ-NPR-Z0-9]{17}/);
+      return match ? match[0] : '';
     }
 
-    // تجهيز نسختين للمعالجة: تباين محسن للحروف الداكنة/المتربة وعكس ألوان للحروف الفاتحة على أرضية داكنة
-    function buildProcessedCanvases(sourceEl, sx, sy, sw, sh, outW, outH) {
-      const base = document.createElement('canvas');
-      base.width = outW;
-      base.height = outH;
-      const bctx = base.getContext('2d');
-      bctx.drawImage(sourceEl, sx, sy, sw, sh, 0, 0, outW, outH);
+    // بناء تصويت خانة بخانة من عدة قراءات قريبة لتجاوز اهتزاز اليد الخفيف
+    function voteFromRecentReadings(readings) {
+      if (!readings.length) return { vin: '', score: 0 };
+      const bestVin = [];
+      let totalConfidence = 0;
 
-      const origData = bctx.getImageData(0, 0, outW, outH);
+      for (let pos = 0; pos < 17; pos++) {
+        const counts = {};
+        let topChar = '';
+        let topCount = 0;
 
-      const c1 = document.createElement('canvas');
-      c1.width = outW;
-      c1.height = outH;
-      const ctx1 = c1.getContext('2d');
-      const d1 = new Uint8ClampedArray(origData.data);
-      for (let i = 0; i < d1.length; i += 4) {
-        const gray = 0.299 * d1[i] + 0.587 * d1[i + 1] + 0.114 * d1[i + 2];
-        const stretched = Math.max(0, Math.min(255, (gray - 128) * 1.7 + 128));
-        d1[i] = stretched;
-        d1[i + 1] = stretched;
-        d1[i + 2] = stretched;
+        for (let r = 0; r < readings.length; r++) {
+          const ch = readings[r][pos];
+          if (!ch) continue;
+          counts[ch] = (counts[ch] || 0) + 1;
+          if (counts[ch] > topCount) {
+            topCount = counts[ch];
+            topChar = ch;
+          }
+        }
+        bestVin.push(topChar || '');
+        totalConfidence += topCount;
       }
-      ctx1.putImageData(new ImageData(d1, outW, outH), 0, 0);
 
-      const c2 = document.createElement('canvas');
-      c2.width = outW;
-      c2.height = outH;
-      const ctx2 = c2.getContext('2d');
-      const d2 = new Uint8ClampedArray(origData.data);
-      for (let i = 0; i < d2.length; i += 4) {
-        const gray = 0.299 * d2[i] + 0.587 * d2[i + 1] + 0.114 * d2[i + 2];
-        const inv = 255 - gray;
-        const stretchedInv = Math.max(0, Math.min(255, (inv - 128) * 1.75 + 128));
-        d2[i] = stretchedInv;
-        d2[i + 1] = stretchedInv;
-        d2[i + 2] = stretchedInv;
+      const avgMatchesPerChar = totalConfidence / 17;
+      return {
+        vin: bestVin.join(''),
+        score: avgMatchesPerChar
+      };
+    }
+
+    // تجهيز نسخة واحدة سريعة وواضحة من الإطار داخل المستطيل الأخضر
+    function buildFastCropCanvas(sourceEl, sx, sy, sw, sh, outW, outH) {
+      const canvas = document.createElement('canvas');
+      canvas.width = outW;
+      canvas.height = outH;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(sourceEl, sx, sy, sw, sh, 0, 0, outW, outH);
+
+      const imgData = ctx.getImageData(0, 0, outW, outH);
+      const data = imgData.data;
+
+      // فحص متوسط السطوع لتحديد هل الرقم فاتح على أرضية داكنة أم داكن على أرضية فاتحة
+      let sumLum = 0;
+      const len = data.length;
+      for (let i = 0; i < len; i += 4) {
+        sumLum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
       }
-      ctx2.putImageData(new ImageData(d2, outW, outH), 0, 0);
+      const avgLum = sumLum / (len / 4);
+      const shouldInvert = avgLum < 122;
 
-      return [c1, c2];
+      for (let i = 0; i < len; i += 4) {
+        let gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        if (shouldInvert) gray = 255 - gray;
+        const val = Math.max(0, Math.min(255, (gray - 128) * 1.75 + 128));
+        data[i] = val;
+        data[i + 1] = val;
+        data[i + 2] = val;
+      }
+
+      ctx.putImageData(new ImageData(data, outW, outH), 0, 0);
+      return canvas;
     }
 
     async function captureAndReadFrame() {
@@ -303,45 +340,49 @@
         const vw = video.videoWidth;
         const vh = video.videoHeight;
 
-        const cropW = Math.floor(vw * 0.90);
-        const cropH = Math.floor(vh * 0.22);
+        const cropW = Math.floor(vw * 0.92);
+        const cropH = Math.floor(vh * 0.24);
         const cropX = Math.floor((vw - cropW) / 2);
         const cropY = Math.floor((vh - cropH) / 2);
 
-        const [c1, c2] = buildProcessedCanvases(
+        const canvas = buildFastCropCanvas(
           video,
           cropX,
           cropY,
           cropW,
           cropH,
-          Math.min(1280, cropW),
-          Math.min(280, cropH)
+          Math.min(1100, cropW),
+          Math.min(240, cropH)
         );
 
-        const res1 = await worker.recognize(c1);
-        let candidate = extractVinCandidate(res1.data.text);
+        const { data: { text } } = await worker.recognize(canvas);
+        const vin = normalizeVin(text);
 
-        if (!candidate || candidate.length < 17) {
-          const res2 = await worker.recognize(c2);
-          const alt = extractVinCandidate(res2.data.text);
-          if (alt.length > candidate.length) candidate = alt;
-        }
+        if (vin && vin.length === 17) {
+          recentReadings.push(vin);
+          if (recentReadings.length > 4) recentReadings.shift();
 
-        if (candidate && candidate.length >= 10) {
-          // كتابة القراءة فوراً في خانة رقم الهيكل لتظهر للمستخدم وتُعدّل بسهولة
-          vinInput.value = candidate;
-          charCount.textContent = 'الخانات: ' + candidate.length + ' / 17';
+          const voted = voteFromRecentReadings(recentReadings);
+          const displayVin = voted.vin.length === 17 ? voted.vin : vin;
 
-          if (candidate.length === 17) {
-            confirmBadge.textContent = 'حالة القراءة: مكتمل (17/17)';
-            statusEl.textContent = 'تم التقاط 17 خانة — راجع الرقم في الخانة واضغط إرسال';
-            if (navigator.vibrate) navigator.vibrate(120);
+          vinInput.value = displayVin;
+          charCount.textContent = 'الخانات: ' + displayVin.length + ' / 17';
+
+          const streakCount = Math.min(2, Math.floor(voted.score));
+          confirmBadge.textContent = 'التطابق: ' + streakCount + ' / 2';
+
+          // تثبيت سريع بمجرد حصول تطابق كافٍ عبر القراءات المتتالية حتى مع اهتزاز اليد الخفيف
+          if (recentReadings.length >= 2 && voted.score >= 1.75) {
+            vinInput.value = voted.vin;
+            charCount.textContent = 'الخانات: 17 / 17';
+            confirmBadge.textContent = 'التطابق: 2 / 2';
+            statusEl.textContent = 'تم التقاط الرقم بسرعة — اضغط إرسال للشيت';
+            if (navigator.vibrate) navigator.vibrate(100);
             isScanning = false;
             liveBtn.textContent = 'مسح سيارة جديدة';
             liveBtn.classList.add('active');
           } else {
-            confirmBadge.textContent = 'حالة القراءة: قراءة مباشرة';
-            statusEl.textContent = 'تحديث مباشر في الخانة (' + candidate.length + '/17) — قرّب أو ثبّت الرقم';
+            statusEl.textContent = 'جاري تثبيت القراءة (' + displayVin + ')...';
           }
         }
       } catch (e) {
@@ -353,31 +394,26 @@
     cameraInput.addEventListener('change', async function () {
       const file = this.files && this.files[0];
       if (!file) return;
-      statusEl.textContent = 'جاري معالجة الصورة بدقة عالية...';
+      statusEl.textContent = 'جاري معالجة الصورة...';
 
       const reader = new FileReader();
       reader.onload = function (e) {
         const img = new Image();
         img.onload = async function () {
-          const targetW = 1400;
+          const targetW = 1280;
           const scale = img.width > targetW ? targetW / img.width : 1;
           const outW = Math.round(img.width * scale);
           const outH = Math.round(img.height * scale);
 
-          const [c1, c2] = buildProcessedCanvases(img, 0, 0, img.width, img.height, outW, outH);
-          const r1 = worker ? await worker.recognize(c1) : await Tesseract.recognize(c1, 'eng');
-          let val = extractVinCandidate(r1.data.text);
+          const canvas = buildFastCropCanvas(img, 0, 0, img.width, img.height, outW, outH);
+          const res = worker
+            ? await worker.recognize(canvas)
+            : await Tesseract.recognize(canvas, 'eng');
 
-          if (!val || val.length < 17) {
-            const r2 = worker ? await worker.recognize(c2) : await Tesseract.recognize(c2, 'eng');
-            const alt = extractVinCandidate(r2.data.text);
-            if (alt.length > val.length) val = alt;
-          }
-
-          vinInput.value = val;
-          charCount.textContent = 'الخانات: ' + val.length + ' / 17';
-          confirmBadge.textContent = val.length === 17 ? 'حالة القراءة: مكتمل (17/17)' : 'حالة القراءة: راجع الرقم';
-          statusEl.textContent = 'راجع الرقم في الخانة وتأكد منه ثم اضغط إرسال للشيت';
+          const vin = normalizeVin(res.data.text) || res.data.text.replace(/[^A-HJ-NPR-Z0-9]/gi, '').toUpperCase().slice(0, 17);
+          vinInput.value = vin;
+          charCount.textContent = 'الخانات: ' + vin.length + ' / 17';
+          statusEl.textContent = 'راجع الرقم واضغط إرسال للشيت';
         };
         img.src = e.target.result;
       };
@@ -389,7 +425,7 @@
       const ref = refInput.value.trim();
 
       if (!vin) {
-        statusEl.textContent = 'وجّه الكاميرا على الرقم أو اكتبه أولاً';
+        statusEl.textContent = 'مرّر الكاميرا على الرقم أو اكتبه أولاً';
         return;
       }
 
@@ -406,7 +442,7 @@
         statusEl.textContent = 'تم الحفظ: ' + vin + ' — جاهز للسيارة التالية';
         vinInput.value = '';
         charCount.textContent = 'الخانات: 0 / 17';
-        confirmBadge.textContent = 'حالة القراءة: جاري البحث';
+        resetScannerMemory();
         sendBtn.disabled = false;
         isScanning = true;
         liveBtn.textContent = 'إيقاف المسح التلقائي';
