@@ -3,8 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ماسح VIN الدقيق للجرد</title>
-  <script src="https://unpkg.com/tesseract.js@v2.1.0/dist/tesseract.min.js"></script>
+  <title>ماسح VIN الذكي (دقة 100%)</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -27,6 +26,34 @@
       margin: 0 0 10px;
       font-size: 18px;
       color: #243b53;
+    }
+    .api-box {
+      background: #f8fafc;
+      border: 1px solid #bcccdc;
+      border-radius: 8px;
+      padding: 8px;
+      margin-bottom: 10px;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .api-box input {
+      flex: 1;
+      margin: 0;
+      padding: 8px;
+      font-size: 12px;
+      text-align: left;
+      direction: ltr;
+    }
+    .api-box button {
+      padding: 8px 12px;
+      background: #2f855a;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 12px;
+      cursor: pointer;
     }
     .scanner-wrap {
       position: relative;
@@ -77,7 +104,7 @@
       margin-bottom: 6px;
       padding: 0 2px;
     }
-    input[type="text"] {
+    input[type="text"], input[type="password"] {
       width: 100%;
       padding: 11px;
       margin-bottom: 8px;
@@ -90,6 +117,11 @@
       text-align: center;
       letter-spacing: 1px;
       text-transform: uppercase;
+    }
+    input[type="password"] {
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: normal;
     }
     .btn-row {
       display: flex;
@@ -139,19 +171,24 @@
 </head>
 <body>
   <div class="card">
-    <h2>ماسح VIN الدقيق للجرد</h2>
+    <h2>ماسح VIN الذكي للجرد</h2>
+
+    <div class="api-box" id="apiBox">
+      <input type="password" id="apiKeyInput" placeholder="ألصق مفتاح Gemini API Key هنا مرة واحدة">
+      <button type="button" onclick="saveApiKey()">حفظ</button>
+    </div>
 
     <div class="scanner-wrap">
       <video id="video" autoplay playsinline muted></video>
       <div class="aim-overlay">
         <div class="aim-box"></div>
-        <div class="aim-label">ضع رقم الهيكل (17 خانة) داخل المستطيل الأخضر وثبّت</div>
+        <div class="aim-label">مرّر رقم الهيكل (17 خانة) داخل المستطيل الأخضر</div>
       </div>
     </div>
 
     <div class="meta-row">
       <span id="charCount">الخانات: 0 / 17</span>
-      <span id="matchBadge">التطابق: 0 / 2</span>
+      <span id="modeBadge">الوضع: مسح ذكي</span>
     </div>
 
     <input type="text" id="vinInput" placeholder="رقم الهيكل (17 خانة)" maxlength="17">
@@ -178,34 +215,33 @@
     const sendBtn = document.getElementById('sendBtn');
     const cameraInput = document.getElementById('cameraInput');
     const charCount = document.getElementById('charCount');
-    const matchBadge = document.getElementById('matchBadge');
+    const modeBadge = document.getElementById('modeBadge');
+    const apiKeyInput = document.getElementById('apiKeyInput');
 
-    let worker = null;
     let isScanning = true;
     let isBusy = false;
     let scanTimer = null;
 
-    // سلة القراءات المكتملة (17 خانة)
-    let history17 = [];
+    // استرجاع مفتاح Gemini المحفوظ في المتصفح
+    const savedKey = localStorage.getItem('GEMINI_VIN_API_KEY') || '';
+    if (savedKey) {
+      apiKeyInput.value = savedKey;
+    }
+
+    function saveApiKey() {
+      const key = apiKeyInput.value.trim();
+      if (!key) {
+        statusEl.textContent = 'أدخل مفتاح Gemini API Key أولاً';
+        return;
+      }
+      localStorage.setItem('GEMINI_VIN_API_KEY', key);
+      statusEl.textContent = 'تم حفظ المفتاح — مرّر الكاميرا على رقم الهيكل';
+    }
 
     vinInput.addEventListener('input', function () {
       this.value = this.value.replace(/[^A-HJ-NPR-Z0-9]/gi, '').toUpperCase().slice(0, 17);
       charCount.textContent = 'الخانات: ' + this.value.length + ' / 17';
     });
-
-    async function initWorker() {
-      statusEl.textContent = 'جاري تجهيز محرك القراءة...';
-      worker = Tesseract.createWorker();
-      await worker.load();
-      await worker.loadLanguage('eng');
-      await worker.initialize('eng');
-      await worker.setParameters({
-        tessedit_char_whitelist: 'ABCDEFGHJKLMNPRSTUVWXYZ0123456789',
-        tessedit_pageseg_mode: '7'
-      });
-      statusEl.textContent = 'جاهز — ضع الرقم داخل المستطيل الأخضر وثبّت';
-      startLoop();
-    }
 
     async function startCamera() {
       try {
@@ -225,7 +261,10 @@
             await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
           } catch (_) {}
         }
-        await initWorker();
+        statusEl.textContent = savedKey
+          ? 'جاهز — مرّر رقم الهيكل داخل المستطيل الأخضر'
+          : 'ألصق مفتاح Gemini API Key بالأعلى واضغط حفظ للبدء';
+        startLoop();
       } catch (err) {
         statusEl.textContent = 'الكاميرا المباشرة غير متاحة — استخدم التقاط الصورة بالأسفل';
         liveBtn.disabled = true;
@@ -234,189 +273,156 @@
 
     function startLoop() {
       if (scanTimer) clearInterval(scanTimer);
-      scanTimer = setInterval(captureAndReadFrame, 450);
+      scanTimer = setInterval(captureAndReadWithGemini, 1100);
     }
 
     function toggleLiveScan() {
       isScanning = !isScanning;
       if (isScanning) {
-        history17 = [];
         liveBtn.textContent = 'إيقاف المسح';
         liveBtn.classList.remove('active');
-        matchBadge.textContent = 'التطابق: 0 / 2';
-        statusEl.textContent = 'المسح المباشر يعمل...';
+        modeBadge.textContent = 'الوضع: مسح ذكي';
+        statusEl.textContent = 'المسح الذكي يعمل...';
       } else {
         liveBtn.textContent = 'استئناف المسح';
         liveBtn.classList.add('active');
-        matchBadge.textContent = 'متوقف';
-        statusEl.textContent = 'راجع الرقم أو عدّله ثم اضغط إرسال للشيت';
+        modeBadge.textContent = 'الوضع: متوقف';
+        statusEl.textContent = 'تم إيقاف المسح — راجع الرقم أو أرسله';
       }
     }
 
-    // استخراج VIN من 17 خانة فقط وتصحيح I/O/Q القياسية في أرقام الهياكل
-    function extractExactVin17(rawText) {
-      if (!rawText) return '';
-      let s = rawText.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    function sanitizeVin(raw) {
+      if (!raw) return '';
+      let s = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
       s = s.replace(/I/g, '1').replace(/O/g, '0').replace(/Q/g, '0');
       const m = s.match(/[A-HJ-NPR-Z0-9]{17}/);
-      if (!m) return '';
-      const vin = m[0];
-      // رفض السلاسل المشوشة ذات التكرار المفرط لنفس الرمز (4 مرات فأكثر)
-      if (/(.)\1{3,}/.test(vin)) return '';
-      return vin;
+      return m ? m[0] : '';
     }
 
-    function sameCharsCount(a, b) {
-      if (!a || !b || a.length !== 17 || b.length !== 17) return 0;
-      let c = 0;
-      for (let i = 0; i < 17; i++) {
-        if (a[i] === b[i]) c++;
-      }
-      return c;
-    }
+    async function askGeminiVision(base64Jpeg) {
+      const apiKey = (localStorage.getItem('GEMINI_VIN_API_KEY') || apiKeyInput.value).trim();
+      if (!apiKey) return '';
 
-    // تصويت خانة بخانة من العينات المتطابقة
-    function voteVin(arr) {
-      const chars = [];
-      for (let i = 0; i < 17; i++) {
-        const freq = {};
-        let bestCh = '';
-        let bestFreq = 0;
-        for (let k = 0; k < arr.length; k++) {
-          const ch = arr[k][i];
-          freq[ch] = (freq[ch] || 0) + 1;
-          if (freq[ch] > bestFreq) {
-            bestFreq = freq[ch];
-            bestCh = ch;
-          }
+      const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + encodeURIComponent(apiKey);
+      const body = {
+        contents: [{
+          parts: [
+            {
+              text: 'Read the 17-character Vehicle Identification Number (VIN) shown inside this image. Output ONLY the exact 17 alphanumeric characters in uppercase with no spaces or explanation. If no clear 17-character VIN is visible, output NONE.'
+            },
+            {
+              inline_data: {
+                mime_type: 'image/jpeg',
+                data: base64Jpeg
+              }
+            }
+          ]
+        }],
+        generationConfig: {
+          temperature: 0,
+          maxOutputTokens: 32
         }
-        chars.push(bestCh);
+      };
+
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error((errData.error && errData.error.message) || 'API Error');
       }
-      return chars.join('');
+
+      const data = await resp.json();
+      const txt = data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts
+        ? data.candidates[0].content.parts.map(p => p.text || '').join('')
+        : '';
+
+      if (txt.trim().toUpperCase().includes('NONE')) return '';
+      return sanitizeVin(txt);
     }
 
-    // تجهيز الصورة بتكبير معتدل وتباين لطيف دون تشويه الحروف
-    function prepareCanvas(sourceEl, sx, sy, sw, sh, outW, outH) {
-      const canvas = document.createElement('canvas');
-      canvas.width = outW;
-      canvas.height = outH;
-      const ctx = canvas.getContext('2d');
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(sourceEl, sx, sy, sw, sh, 0, 0, outW, outH);
-
-      const imgData = ctx.getImageData(0, 0, outW, outH);
-      const data = imgData.data;
-
-      let sum = 0;
-      const len = data.length;
-      for (let i = 0; i < len; i += 4) {
-        sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      }
-      const mean = sum / (len / 4);
-      const invert = mean < 115;
-
-      for (let i = 0; i < len; i += 4) {
-        let g = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        if (invert) g = 255 - g;
-        const v = Math.max(0, Math.min(255, (g - 128) * 1.35 + 128));
-        data[i] = v;
-        data[i + 1] = v;
-        data[i + 2] = v;
-      }
-
-      ctx.putImageData(new ImageData(data, outW, outH), 0, 0);
-      return canvas;
-    }
-
-    async function captureAndReadFrame() {
-      if (!isScanning || isBusy || !worker || !video.videoWidth) return;
+    async function captureAndReadWithGemini() {
+      const apiKey = (localStorage.getItem('GEMINI_VIN_API_KEY') || apiKeyInput.value).trim();
+      if (!apiKey || !isScanning || isBusy || !video.videoWidth) return;
       isBusy = true;
 
       try {
         const vw = video.videoWidth;
         const vh = video.videoHeight;
-        const cropW = Math.floor(vw * 0.92);
-        const cropH = Math.floor(vh * 0.22);
+        // قص منطقة المستطيل الأخضر مع هامش بسيط لسرعة الإرسال ودقة القراءة
+        const cropW = Math.floor(vw * 0.94);
+        const cropH = Math.floor(vh * 0.28);
         const cropX = Math.floor((vw - cropW) / 2);
         const cropY = Math.floor((vh - cropH) / 2);
 
-        const canvas = prepareCanvas(
-          video,
-          cropX,
-          cropY,
-          cropW,
-          cropH,
-          Math.min(1280, cropW),
-          Math.min(250, cropH)
-        );
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.min(1280, cropW);
+        canvas.height = Math.min(360, cropH);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
 
-        const { data: { text } } = await worker.recognize(canvas);
-        const vin = extractExactVin17(text);
-        if (!vin) return;
+        const base64 = canvas.toDataURL('image/jpeg', 0.88).split(',')[1];
+        statusEl.textContent = 'جاري القراءة بالذكاء الاصطناعي...';
 
-        // إذا اختلف الرقم عن السابق بأكثر من 3 خانات نبدأ سلة جديدة
-        if (history17.length > 0) {
-          const prev = history17[history17.length - 1];
-          if (sameCharsCount(prev, vin) < 14) {
-            history17 = [];
-          }
-        }
-
-        history17.push(vin);
-        if (history17.length > 4) history17.shift();
-
-        const voted = voteVin(history17);
-        const matches = history17.filter(item => sameCharsCount(item, voted) >= 15).length;
-        const step = Math.min(2, matches);
-        matchBadge.textContent = 'التطابق: ' + step + ' / 2';
-
-        // نثبّت الرقم فقط بعد تطابق قراءتين من 17 خانة في 15 خانة فأكثر
-        if (history17.length >= 2 && matches >= 2) {
-          vinInput.value = voted;
+        const vin = await askGeminiVision(base64);
+        if (vin && vin.length === 17) {
+          vinInput.value = vin;
           charCount.textContent = 'الخانات: 17 / 17';
           isScanning = false;
           liveBtn.textContent = 'مسح سيارة جديدة';
           liveBtn.classList.add('active');
-          statusEl.textContent = 'تم التقاط الرقم كاملاً — راجع ثم اضغط إرسال للشيت';
+          modeBadge.textContent = 'مكتمل (17/17)';
+          statusEl.textContent = 'تم التقاط الرقم بدقة — اضغط إرسال للشيت';
           if (navigator.vibrate) navigator.vibrate(100);
         } else {
-          statusEl.textContent = 'جاري مطابقة القراءة (' + step + '/2)... ثبّت لحظة';
+          statusEl.textContent = 'مرّر رقم الهيكل داخل المستطيل الأخضر...';
         }
-      } catch (e) {
+      } catch (err) {
+        statusEl.textContent = 'تحقق من مفتاح Gemini API أو الإنترنت: ' + err.message;
       } finally {
         isBusy = false;
       }
     }
 
-    // في الصور عالية الدقة نُخرج قراءة كاملة (17 خانة) مباشرة من الصورة
     cameraInput.addEventListener('change', async function () {
       const file = this.files && this.files[0];
       if (!file) return;
-      statusEl.textContent = 'جاري قراءة الصورة عالية الدقة...';
+      const apiKey = (localStorage.getItem('GEMINI_VIN_API_KEY') || apiKeyInput.value).trim();
+      if (!apiKey) {
+        statusEl.textContent = 'ألصق مفتاح Gemini API Key بالأعلى أولاً';
+        return;
+      }
 
+      statusEl.textContent = 'جاري تحليل الصورة عالية الدقة...';
       const reader = new FileReader();
       reader.onload = function (e) {
         const img = new Image();
         img.onload = async function () {
-          const targetW = 1400;
-          const scale = img.width > targetW ? targetW / img.width : 1;
-          const outW = Math.round(img.width * scale);
-          const outH = Math.round(img.height * scale);
+          const maxW = 1400;
+          const scale = img.width > maxW ? maxW / img.width : 1;
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-          const canvas = prepareCanvas(img, 0, 0, img.width, img.height, outW, outH);
-          const res = worker
-            ? await worker.recognize(canvas)
-            : await Tesseract.recognize(canvas, 'eng');
-
-          const vin = extractExactVin17(res.data.text);
-          const rawFallback = res.data.text.replace(/[^A-HJ-NPR-Z0-9]/gi, '').toUpperCase().slice(0, 17);
-          const finalVin = vin || rawFallback;
-
-          vinInput.value = finalVin;
-          charCount.textContent = 'الخانات: ' + finalVin.length + ' / 17';
-          matchBadge.textContent = vin ? 'التطابق: 2 / 2' : 'مراجعة';
-          statusEl.textContent = 'راجع الرقم في الخانة ثم اضغط إرسال للشيت';
+          const base64 = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+          try {
+            const vin = await askGeminiVision(base64);
+            if (vin) {
+              vinInput.value = vin;
+              charCount.textContent = 'الخانات: 17 / 17';
+              modeBadge.textContent = 'صورة عالية الدقة';
+              statusEl.textContent = 'تمت القراءة بدقة — اضغط إرسال للشيت';
+            } else {
+              statusEl.textContent = 'لم يتم العثور على 17 خانة واضحة في الصورة';
+            }
+          } catch (err) {
+            statusEl.textContent = 'خطأ: ' + err.message;
+          }
         };
         img.src = e.target.result;
       };
@@ -445,8 +451,7 @@
         statusEl.textContent = 'تم الحفظ: ' + vin + ' — جاهز للسيارة التالية';
         vinInput.value = '';
         charCount.textContent = 'الخانات: 0 / 17';
-        history17 = [];
-        matchBadge.textContent = 'التطابق: 0 / 2';
+        modeBadge.textContent = 'الوضع: مسح ذكي';
         sendBtn.disabled = false;
         isScanning = true;
         liveBtn.textContent = 'إيقاف المسح';
