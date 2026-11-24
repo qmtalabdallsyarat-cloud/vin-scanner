@@ -151,7 +151,7 @@
 
     <div class="meta-row">
       <span id="charCount">الخانات: 0 / 17</span>
-      <span id="confirmBadge">التطابق: 0 / 2</span>
+      <span id="confirmBadge">حالة القراءة: جاري البحث</span>
     </div>
 
     <input type="text" id="vinInput" placeholder="رقم الهيكل (17 خانة)" maxlength="17">
@@ -184,9 +184,6 @@
     let isScanning = true;
     let isBusy = false;
     let scanTimer = null;
-
-    let lastCandidate = '';
-    let matchStreak = 0;
 
     vinInput.addEventListener('input', function () {
       this.value = this.value.replace(/[^A-HJ-NPR-Z0-9]/gi, '').toUpperCase().slice(0, 17);
@@ -227,33 +224,36 @@
 
     function startLoop() {
       if (scanTimer) clearInterval(scanTimer);
-      scanTimer = setInterval(captureAndReadFrame, 950);
+      scanTimer = setInterval(captureAndReadFrame, 850);
     }
 
     function toggleLiveScan() {
       isScanning = !isScanning;
-      lastCandidate = '';
-      matchStreak = 0;
-      confirmBadge.textContent = 'التطابق: 0 / 2';
       if (isScanning) {
         liveBtn.textContent = 'إيقاف المسح التلقائي';
         liveBtn.classList.remove('active');
+        confirmBadge.textContent = 'حالة القراءة: جاري البحث';
         statusEl.textContent = 'المسح التلقائي يعمل...';
       } else {
         liveBtn.textContent = 'تشغيل المسح التلقائي';
         liveBtn.classList.add('active');
-        statusEl.textContent = 'تم إيقاف المسح مؤقتاً';
+        confirmBadge.textContent = 'حالة القراءة: متوقف';
+        statusEl.textContent = 'تم إيقاف المسح مؤقتاً — راجع الرقم أو عدّله ثم أرسله';
       }
     }
 
-    function normalizeVinString(rawText) {
-      let s = rawText.toUpperCase().replace(/[^A-Z0-9]/g, '');
-      s = s.replace(/I/g, '1').replace(/O/g, '0').replace(/Q/g, '0');
-      const match = s.match(/[A-HJ-NPR-Z0-9]{17}/);
-      return match ? match[0] : '';
+    // استخراج أفضل 17 خانة مطابقة لنمط رقم الهيكل القياسي
+    function extractVinCandidate(rawText) {
+      let cleaned = rawText.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      cleaned = cleaned.replace(/I/g, '1').replace(/O/g, '0').replace(/Q/g, '0');
+      const strictMatch = cleaned.match(/[A-HJ-NPR-Z0-9]{17}/);
+      if (strictMatch) return strictMatch[0];
+
+      const alphaNum = rawText.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
+      return alphaNum.slice(0, 17);
     }
 
-    // تجهيز صورتين للخلفية: الأولى لمعالجة الحروف الفاتحة على أرضية داكنة، والثانية للحروف الداكنة على أرضية فاتحة/متربة
+    // تجهيز نسختين للمعالجة: تباين محسن للحروف الداكنة/المتربة وعكس ألوان للحروف الفاتحة على أرضية داكنة
     function buildProcessedCanvases(sourceEl, sx, sy, sw, sh, outW, outH) {
       const base = document.createElement('canvas');
       base.width = outW;
@@ -263,7 +263,6 @@
 
       const origData = bctx.getImageData(0, 0, outW, outH);
 
-      // النسخة 1: تباين رمادي محسن يحافظ على التدرج في وجود التراب أو الانعكاس
       const c1 = document.createElement('canvas');
       c1.width = outW;
       c1.height = outH;
@@ -271,15 +270,13 @@
       const d1 = new Uint8ClampedArray(origData.data);
       for (let i = 0; i < d1.length; i += 4) {
         const gray = 0.299 * d1[i] + 0.587 * d1[i + 1] + 0.114 * d1[i + 2];
-        // توسيع التباين حول المنتصف بدون قطع حاد
-        const stretched = Math.max(0, Math.min(255, (gray - 128) * 1.65 + 128));
+        const stretched = Math.max(0, Math.min(255, (gray - 128) * 1.7 + 128));
         d1[i] = stretched;
         d1[i + 1] = stretched;
         d1[i + 2] = stretched;
       }
       ctx1.putImageData(new ImageData(d1, outW, outH), 0, 0);
 
-      // النسخة 2: عكس الألوان (Invert) لقراءة الأرقام الفاتحة الواضحة على الزجاج أو اللوحة السوداء المتربة
       const c2 = document.createElement('canvas');
       c2.width = outW;
       c2.height = outH;
@@ -288,7 +285,7 @@
       for (let i = 0; i < d2.length; i += 4) {
         const gray = 0.299 * d2[i] + 0.587 * d2[i + 1] + 0.114 * d2[i + 2];
         const inv = 255 - gray;
-        const stretchedInv = Math.max(0, Math.min(255, (inv - 128) * 1.7 + 128));
+        const stretchedInv = Math.max(0, Math.min(255, (inv - 128) * 1.75 + 128));
         d2[i] = stretchedInv;
         d2[i + 1] = stretchedInv;
         d2[i + 2] = stretchedInv;
@@ -317,37 +314,34 @@
           cropY,
           cropW,
           cropH,
-          Math.min(1200, cropW),
-          Math.min(260, cropH)
+          Math.min(1280, cropW),
+          Math.min(280, cropH)
         );
 
         const res1 = await worker.recognize(c1);
-        let vin = normalizeVinString(res1.data.text);
+        let candidate = extractVinCandidate(res1.data.text);
 
-        if (!vin) {
+        if (!candidate || candidate.length < 17) {
           const res2 = await worker.recognize(c2);
-          vin = normalizeVinString(res2.data.text);
+          const alt = extractVinCandidate(res2.data.text);
+          if (alt.length > candidate.length) candidate = alt;
         }
 
-        if (vin && vin.length === 17) {
-          if (vin === lastCandidate) {
-            matchStreak += 1;
-          } else {
-            lastCandidate = vin;
-            matchStreak = 1;
-          }
-          confirmBadge.textContent = 'التطابق: ' + matchStreak + ' / 2';
+        if (candidate && candidate.length >= 10) {
+          // كتابة القراءة فوراً في خانة رقم الهيكل لتظهر للمستخدم وتُعدّل بسهولة
+          vinInput.value = candidate;
+          charCount.textContent = 'الخانات: ' + candidate.length + ' / 17';
 
-          if (matchStreak >= 2) {
-            vinInput.value = vin;
-            charCount.textContent = 'الخانات: 17 / 17';
-            statusEl.textContent = 'تم التأكيد (قراءتان متطابقتان) — راجع واضغط إرسال';
+          if (candidate.length === 17) {
+            confirmBadge.textContent = 'حالة القراءة: مكتمل (17/17)';
+            statusEl.textContent = 'تم التقاط 17 خانة — راجع الرقم في الخانة واضغط إرسال';
             if (navigator.vibrate) navigator.vibrate(120);
             isScanning = false;
             liveBtn.textContent = 'مسح سيارة جديدة';
             liveBtn.classList.add('active');
           } else {
-            statusEl.textContent = 'قراءة أولية: ' + vin + ' — ثبّت الكاميرا للتأكيد...';
+            confirmBadge.textContent = 'حالة القراءة: قراءة مباشرة';
+            statusEl.textContent = 'تحديث مباشر في الخانة (' + candidate.length + '/17) — قرّب أو ثبّت الرقم';
           }
         }
       } catch (e) {
@@ -372,17 +366,18 @@
 
           const [c1, c2] = buildProcessedCanvases(img, 0, 0, img.width, img.height, outW, outH);
           const r1 = worker ? await worker.recognize(c1) : await Tesseract.recognize(c1, 'eng');
-          let vin = normalizeVinString(r1.data.text);
+          let val = extractVinCandidate(r1.data.text);
 
-          if (!vin) {
+          if (!val || val.length < 17) {
             const r2 = worker ? await worker.recognize(c2) : await Tesseract.recognize(c2, 'eng');
-            vin = normalizeVinString(r2.data.text);
+            const alt = extractVinCandidate(r2.data.text);
+            if (alt.length > val.length) val = alt;
           }
 
-          const finalVal = vin || r1.data.text.replace(/[^A-HJ-NPR-Z0-9]/gi, '').toUpperCase().slice(0, 17);
-          vinInput.value = finalVal;
-          charCount.textContent = 'الخانات: ' + finalVal.length + ' / 17';
-          statusEl.textContent = 'راجع الرقم وتأكد منه ثم اضغط إرسال للشيت';
+          vinInput.value = val;
+          charCount.textContent = 'الخانات: ' + val.length + ' / 17';
+          confirmBadge.textContent = val.length === 17 ? 'حالة القراءة: مكتمل (17/17)' : 'حالة القراءة: راجع الرقم';
+          statusEl.textContent = 'راجع الرقم في الخانة وتأكد منه ثم اضغط إرسال للشيت';
         };
         img.src = e.target.result;
       };
@@ -411,9 +406,7 @@
         statusEl.textContent = 'تم الحفظ: ' + vin + ' — جاهز للسيارة التالية';
         vinInput.value = '';
         charCount.textContent = 'الخانات: 0 / 17';
-        confirmBadge.textContent = 'التطابق: 0 / 2';
-        lastCandidate = '';
-        matchStreak = 0;
+        confirmBadge.textContent = 'حالة القراءة: جاري البحث';
         sendBtn.disabled = false;
         isScanning = true;
         liveBtn.textContent = 'إيقاف المسح التلقائي';
