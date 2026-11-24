@@ -145,13 +145,13 @@
       <video id="video" autoplay playsinline muted></video>
       <div class="aim-overlay">
         <div class="aim-box"></div>
-        <div class="aim-label">مرّر الرقم (17 خانة) داخل المستطيل الأخضر</div>
+        <div class="aim-label">ثبّت رقم الهيكل (17 خانة) بوضوح داخل المستطيل الأخضر</div>
       </div>
     </div>
 
     <div class="meta-row">
       <span id="charCount">الخانات: 0 / 17</span>
-      <span id="modeBadge">الوضع: مسح مباشر</span>
+      <span id="modeBadge">التطابق: 0 / 2</span>
     </div>
 
     <input type="text" id="vinInput" placeholder="رقم الهيكل (17 خانة)" maxlength="17">
@@ -185,6 +185,9 @@
     let isBusy = false;
     let scanTimer = null;
 
+    // تخزين القراءات المكتملة (17 خانة) لتأكيد القراءة الصحيحة فقط
+    let samples = [];
+
     vinInput.addEventListener('input', function () {
       this.value = this.value.replace(/[^A-HJ-NPR-Z0-9]/gi, '').toUpperCase().slice(0, 17);
       charCount.textContent = 'الخانات: ' + this.value.length + ' / 17';
@@ -200,7 +203,7 @@
         tessedit_char_whitelist: 'ABCDEFGHJKLMNPRSTUVWXYZ0123456789',
         tessedit_pageseg_mode: '7'
       });
-      statusEl.textContent = 'جاهز للجرد — مرّر الرقم داخل المستطيل الأخضر';
+      statusEl.textContent = 'جاهز للجرد — ثبّت الرقم داخل المستطيل الأخضر';
       startLoop();
     }
 
@@ -237,25 +240,56 @@
     function toggleLiveScan() {
       isScanning = !isScanning;
       if (isScanning) {
+        samples = [];
         liveBtn.textContent = 'إيقاف المسح';
         liveBtn.classList.remove('active');
-        modeBadge.textContent = 'الوضع: مسح مباشر';
+        modeBadge.textContent = 'التطابق: 0 / 2';
         statusEl.textContent = 'المسح المباشر يعمل...';
       } else {
         liveBtn.textContent = 'استئناف المسح';
         liveBtn.classList.add('active');
-        modeBadge.textContent = 'الوضع: متوقف للمراجعة';
-        statusEl.textContent = 'راجع الرقم أو عدّله ثم اضغط إرسال للشيت';
+        modeBadge.textContent = 'الوضع: متوقف';
+        statusEl.textContent = 'راجع الرقم في الخانة أو عدّله ثم اضغط إرسال للشيت';
       }
     }
 
-    function extractVinCandidate(rawText) {
+    // استخراج سلسلة 17 خانة فقط (بدون قص عشوائي من أول نص غير مكتمل)
+    function extractExact17Vin(rawText) {
       if (!rawText) return '';
       let s = rawText.toUpperCase().replace(/[^A-Z0-9]/g, '');
       s = s.replace(/I/g, '1').replace(/O/g, '0').replace(/Q/g, '0');
       const m = s.match(/[A-HJ-NPR-Z0-9]{17}/);
-      if (m) return m[0];
-      return s.slice(0, 17);
+      return m ? m[0] : '';
+    }
+
+    // حساب عدد الخانات المتطابقة بين رقمين من 17 خانة
+    function matchingChars(a, b) {
+      if (!a || !b || a.length !== 17 || b.length !== 17) return 0;
+      let same = 0;
+      for (let i = 0; i < 17; i++) {
+        if (a[i] === b[i]) same++;
+      }
+      return same;
+    }
+
+    // تصويت خانة بخانة من العينات المتطابقة
+    function voteByPosition(arr) {
+      const res = [];
+      for (let i = 0; i < 17; i++) {
+        const counts = {};
+        let best = '';
+        let maxC = 0;
+        for (let k = 0; k < arr.length; k++) {
+          const ch = arr[k][i];
+          counts[ch] = (counts[ch] || 0) + 1;
+          if (counts[ch] > maxC) {
+            maxC = counts[ch];
+            best = ch;
+          }
+        }
+        res.push(best);
+      }
+      return res.join('');
     }
 
     function cropCanvasFromVideo(vw, vh) {
@@ -265,8 +299,8 @@
       const cropY = Math.floor((vh - cropH) / 2);
 
       const canvas = document.createElement('canvas');
-      canvas.width = Math.min(1200, cropW);
-      canvas.height = Math.min(240, cropH);
+      canvas.width = Math.min(1280, cropW);
+      canvas.height = Math.min(250, cropH);
       const ctx = canvas.getContext('2d');
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
@@ -281,22 +315,38 @@
       try {
         const canvas = cropCanvasFromVideo(video.videoWidth, video.videoHeight);
         const { data: { text } } = await worker.recognize(canvas);
-        const candidate = extractVinCandidate(text);
+        const vin17 = extractExact17Vin(text);
 
-        if (candidate.length >= 10) {
-          vinInput.value = candidate.slice(0, 17);
-          charCount.textContent = 'الخانات: ' + vinInput.value.length + ' / 17';
+        // نتجاهل القراءات الناقصة (أقل من 17 خانة) حتى لا تدخل خانات مبتورة مثل 114 بدلاً من 14CKXT308
+        if (!vin17) return;
 
-          if (vinInput.value.length === 17) {
-            isScanning = false;
-            liveBtn.textContent = 'مسح سيارة جديدة';
-            liveBtn.classList.add('active');
-            modeBadge.textContent = 'الوضع: مكتمل (17/17)';
-            statusEl.textContent = 'تم التقاط 17 خانة — راجع الرقم وعدّل أي حرف إن لزم ثم أرسله';
-            if (navigator.vibrate) navigator.vibrate(100);
-          } else {
-            statusEl.textContent = 'جاري إكمال الخانات (' + vinInput.value.length + '/17)...';
+        // إذا اختلف الرقم عن السابق بأكثر من 3 خانات فهذا انتقال لرقم جديد، فنبدأ قائمة جديدة
+        if (samples.length > 0) {
+          const last = samples[samples.length - 1];
+          if (matchingChars(last, vin17) < 14) {
+            samples = [];
           }
+        }
+
+        samples.push(vin17);
+        if (samples.length > 4) samples.shift();
+
+        const voted = voteByPosition(samples);
+        const agreeCount = samples.filter(s => matchingChars(s, voted) >= 15).length;
+        const step = Math.min(2, agreeCount);
+        modeBadge.textContent = 'التطابق: ' + step + ' / 2';
+
+        // نثبّت الرقم في الخانة فقط عند تطابق قراءتين متقاربتين جداً (15 خانة متطابقة فأكثر)
+        if (samples.length >= 2 && agreeCount >= 2) {
+          vinInput.value = voted;
+          charCount.textContent = 'الخانات: 17 / 17';
+          isScanning = false;
+          liveBtn.textContent = 'مسح سيارة جديدة';
+          liveBtn.classList.add('active');
+          statusEl.textContent = 'تم التقاط الرقم بدقة — راجع وعدّل أي حرف إن لزم ثم أرسله';
+          if (navigator.vibrate) navigator.vibrate(100);
+        } else {
+          statusEl.textContent = 'جاري مطابقة القراءة (' + step + '/2)... ثبّت قليلاً';
         }
       } catch (e) {
       } finally {
@@ -325,10 +375,13 @@
             ? await worker.recognize(canvas)
             : await Tesseract.recognize(canvas, 'eng');
 
-          const candidate = extractVinCandidate(res.data.text);
-          vinInput.value = candidate;
-          charCount.textContent = 'الخانات: ' + candidate.length + ' / 17';
-          modeBadge.textContent = 'الوضع: صورة بديلة';
+          const vin17 = extractExact17Vin(res.data.text);
+          const fallback = res.data.text.replace(/[^A-HJ-NPR-Z0-9]/gi, '').toUpperCase().slice(0, 17);
+          const chosen = vin17 || fallback;
+
+          vinInput.value = chosen;
+          charCount.textContent = 'الخانات: ' + chosen.length + ' / 17';
+          modeBadge.textContent = vin17 ? 'التطابق: 2 / 2' : 'الوضع: مراجعة';
           statusEl.textContent = 'راجع الرقم في الخانة ثم اضغط إرسال للشيت';
         };
         img.src = e.target.result;
@@ -358,7 +411,8 @@
         statusEl.textContent = 'تم الحفظ: ' + vin + ' — جاهز للسيارة التالية';
         vinInput.value = '';
         charCount.textContent = 'الخانات: 0 / 17';
-        modeBadge.textContent = 'الوضع: مسح مباشر';
+        samples = [];
+        modeBadge.textContent = 'التطابق: 0 / 2';
         sendBtn.disabled = false;
         isScanning = true;
         liveBtn.textContent = 'إيقاف المسح';
